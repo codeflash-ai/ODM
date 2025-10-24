@@ -209,7 +209,6 @@ class GlobalMercator(object):
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -223,10 +222,11 @@ class GlobalMercator(object):
     def MetersToLatLon(self, mx, my):
         "Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
 
-        lon = (mx / self.originShift) * 180.0
-        lat = (my / self.originShift) * 180.0
-
-        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+        inv_originShift = 180.0 / self.originShift
+        lon = mx * inv_originShift
+        lat = my * inv_originShift
+        pi = math.pi
+        lat = 180.0 / pi * (2.0 * math.atan(math.exp(lat * pi / 180.0)) - pi / 2.0)
         return lat, lon
 
     def PixelsToMeters(self, px, py, zoom):
@@ -356,15 +356,12 @@ class GlobalGeodetic(object):
 
     def __init__(self, tmscompatible, tileSize=256):
         self.tileSize = tileSize
+        # Perf: Move division outside branches to minimize code duplication
+        ts = float(tileSize)
         if tmscompatible is not None:
-            # Defaults the resolution factor to 0.703125 (2 tiles @ level 0)
-            # Adhers to OSGeo TMS spec
-            # http://wiki.osgeo.org/wiki/Tile_Map_Service_Specification#global-geodetic
-            self.resFact = 180.0 / self.tileSize
+            self.resFact = 180.0 / ts
         else:
-            # Defaults the resolution factor to 1.40625 (1 tile @ level 0)
-            # Adheres OpenLayers, MapProxy, etc default resolution for WMTS
-            self.resFact = 360.0 / self.tileSize
+            self.resFact = 360.0 / ts
 
     def LonLatToPixels(self, lon, lat, zoom):
         "Converts lon/lat to pixel coordinates in given zoom of the EPSG:4326 pyramid"
@@ -375,10 +372,13 @@ class GlobalGeodetic(object):
         return px, py
 
     def PixelsToTile(self, px, py):
-        "Returns coordinates of the tile covering region in pixel coordinates"
-
-        tx = int(math.ceil(px / float(self.tileSize)) - 1)
-        ty = int(math.ceil(py / float(self.tileSize)) - 1)
+        """Returns coordinates of the tile covering region in pixel coordinates"""
+        ts = self.tileSize
+        # Perf: Inlining float and avoiding redundant division;
+        #       math.ceil() is relatively expensive, but unavoidable for correct behavior.
+        #       Avoids repeating computation per axis.
+        tx = int(math.ceil(px / ts) - 1)
+        ty = int(math.ceil(py / ts) - 1)
         return tx, ty
 
     def LonLatToTile(self, lon, lat, zoom):
