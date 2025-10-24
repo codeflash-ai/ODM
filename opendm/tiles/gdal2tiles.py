@@ -51,6 +51,20 @@ from xml.etree import ElementTree
 from osgeo import gdal
 from osgeo import osr
 
+_PI = math.pi
+
+_ORIGIN_SHIFT = 2 * _PI * 6378137 / 2.0
+
+_DEG2RAD = _PI / 180.0
+
+_RAD2DEG = 180.0 / _PI
+
+_INV_180 = 1.0 / 180.0
+
+_LOG = math.log
+
+_TAN = math.tan
+
 try:
     from PIL import Image
     import numpy
@@ -204,20 +218,26 @@ class GlobalMercator(object):
     """
 
     def __init__(self, tileSize=256):
-        "Initialize the TMS Global Mercator pyramid"
+        """Initialize the TMS Global Mercator pyramid"""
         self.tileSize = tileSize
-        self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
+        self.initialResolution = 2 * _PI * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
-        self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
+        self.originShift = _ORIGIN_SHIFT
 
     def LatLonToMeters(self, lat, lon):
-        "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
+        """Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"""
+        # Inline arithmetic and use constant multipliers to optimize math expressions
 
-        mx = lon * self.originShift / 180.0
-        my = math.log(math.tan((90 + lat) * math.pi / 360.0)) / (math.pi / 180.0)
-
-        my = my * self.originShift / 180.0
+        # Avoid attribute lookups, use module-level constants
+        mx = lon * _ORIGIN_SHIFT * _INV_180
+        # The expression (90 + lat) * math.pi / 360 converts to radians for the mercator projection
+        # Avoid redundant math calls and variables
+        # Compute (90 + lat) * _DEG2RAD / 2
+        lat_rad = (90.0 + lat) * (_DEG2RAD * 0.5)
+        tan_lat = _TAN(lat_rad)
+        log_tan_lat = _LOG(tan_lat)
+        my = log_tan_lat * _RAD2DEG
+        my = my * _ORIGIN_SHIFT * _INV_180
         return mx, my
 
     def MetersToLatLon(self, mx, my):
