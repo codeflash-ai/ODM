@@ -210,6 +210,7 @@ class GlobalMercator(object):
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
         # 20037508.342789244
+        self._resolution_cache = {}
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -232,7 +233,11 @@ class GlobalMercator(object):
     def PixelsToMeters(self, px, py, zoom):
         "Converts pixel coordinates in given zoom level of pyramid to EPSG:3857"
 
-        res = self.Resolution(zoom)
+        res = self._resolution_cache.get(zoom)
+        if res is None:
+            res = self.Resolution(zoom)
+            self._resolution_cache[zoom] = res
+
         mx = px * res - self.originShift
         my = py * res - self.originShift
         return mx, my
