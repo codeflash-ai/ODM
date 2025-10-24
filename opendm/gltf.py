@@ -106,21 +106,13 @@ def convert_materials_to_jpeg(materials):
         image = materials[mat]
 
         if not skip_conversion:
-            image = image.astype(np.float32)
-            image -= min_value
-            image *= 255.0 / value_range
-            np.around(image, out=image)
-            image[image > 255] = 255
-            image[image < 0] = 0
-            image = image.astype(np.uint8)
+            image = np.clip(np.around((image.astype(np.float32) - min_value) * (255.0 / value_range)), 0, 255).astype(np.uint8)
 
         with MemoryFile() as memfile:
             bands, h, w = image.shape
             bands = min(3, bands)
             with memfile.open(driver='JPEG', jpeg_quality=90, count=bands, width=w, height=h, dtype=rasterio.dtypes.uint8) as dst:
-                for b in range(1, min(3, bands) + 1):
-                    dst.write(image[b - 1], b)
-            memfile.seek(0)
+                dst.write(image[:bands])
             materials[mat] = memfile.read()
 
     return materials
