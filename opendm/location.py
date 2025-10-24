@@ -3,6 +3,12 @@ from opendm import log
 from pyproj import Proj, Transformer, CRS
 from osgeo import osr
 
+_transformer_cache = {}
+
+_crs2osr_cache = {}
+
+_utm_srs_cache = {}
+
 def extract_utm_coords(photos, images_path, output_coords_file):
     """
     Create a coordinate file containing the GPS positions of all cameras 
@@ -80,10 +86,17 @@ def proj_srs_convert(srs):
     return res
 
 def transformer(from_srs, to_srs):
-    src = proj_srs_convert(from_srs)
-    tgt = proj_srs_convert(to_srs)
-    return osr.CoordinateTransformation(src, tgt)
-    
+    """Create and cache coordinate transformation between two SRS."""
+    from_osr = _get_osr_from_crs(from_srs)
+    to_osr = _get_osr_from_crs(to_srs)
+    cache_key = (id(from_osr), id(to_osr))  # ids are suitable since OSR objects are cached per CRS
+
+    try:
+        return _transformer_cache[cache_key]
+    except KeyError:
+        ct = osr.CoordinateTransformation(from_osr, to_osr)
+        _transformer_cache[cache_key] = ct
+        return ct
 def get_utm_zone_and_hemisphere_from(lon, lat):
     """
     Calculate the UTM zone and hemisphere that a longitude/latitude pair falls on
@@ -160,11 +173,42 @@ def parse_srs_header(header):
 
 def utm_srs_from_ll(lon, lat):
     utm_zone, hemisphere = get_utm_zone_and_hemisphere_from(lon, lat)
-    return parse_srs_header("WGS84 UTM %s%s" % (utm_zone, hemisphere))
+    key = (utm_zone, hemisphere)
+    try:
+        return _utm_srs_cache[key]
+    except KeyError:
+        # String format call is very fast, not worth caching separately
+        srs = parse_srs_header(f"WGS84 UTM {utm_zone}{hemisphere}")
+        _utm_srs_cache[key] = srs
+        return srs
 
 def utm_transformers_from_ll(lon, lat):
-    source_srs = CRS.from_epsg(4326)
+    # CRS.from_epsg(4326) is very common; cache it explicitly
+    # It is safe to cache CRS instances
+    try:
+        source_srs = utm_transformers_from_ll._wgs84_crs
+    except AttributeError:
+        source_srs = CRS.from_epsg(4326)
+        utm_transformers_from_ll._wgs84_crs = source_srs
+
     target_srs = utm_srs_from_ll(lon, lat)
     ll_to_utm = transformer(source_srs, target_srs)
     utm_to_ll = transformer(target_srs, source_srs)
     return ll_to_utm, utm_to_ll
+
+def _crs_cache_key(crs: CRS):
+    # Try to use authoritative EPSG if available, else fallback to proj4 string
+    epsg = crs.to_epsg()
+    if epsg is not None:
+        return ('epsg', epsg)
+    else:
+        return (crs.to_proj4(),)
+
+def _get_osr_from_crs(crs: CRS):
+    key = _crs_cache_key(crs)
+    try:
+        return _crs2osr_cache[key]
+    except KeyError:
+        osr_srs = proj_srs_convert(crs)
+        _crs2osr_cache[key] = osr_srs
+        return osr_srs
