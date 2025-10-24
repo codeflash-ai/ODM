@@ -3,6 +3,9 @@ from opendm import log
 from pyproj import Proj, Transformer, CRS
 from osgeo import osr
 
+# Cache Proj instances to avoid expensive repeated construction
+_proj_cache: dict[tuple[int, str], Proj] = {}
+
 def extract_utm_coords(photos, images_path, output_coords_file):
     """
     Create a coordinate file containing the GPS positions of all cameras 
@@ -105,12 +108,17 @@ def convert_to_utm(lon, lat, alt, utm_zone, hemisphere):
     :param hemisphere one of 'N' or 'S'
     :return [x,y,z] UTM coordinates
     """
-    if hemisphere == 'N':
-        p = Proj(proj='utm',zone=utm_zone,ellps='WGS84', preserve_units=True)
-    else:
-        p = Proj(proj='utm',zone=utm_zone,ellps='WGS84', preserve_units=True, south=True)
-    
-    x,y = p(lon, lat)
+    key = (utm_zone, hemisphere)
+    try:
+        p = _proj_cache[key]
+    except KeyError:
+        if hemisphere == 'N':
+            p = Proj(proj='utm', zone=utm_zone, ellps='WGS84', preserve_units=True)
+        else:
+            p = Proj(proj='utm', zone=utm_zone, ellps='WGS84', preserve_units=True, south=True)
+        _proj_cache[key] = p
+
+    x, y = p(lon, lat)
     return [x, y, alt]
 
 def parse_srs_header(header):
