@@ -9,6 +9,8 @@ import threading
 import time
 from opendm import log
 
+_total_memory = virtual_memory().total
+
 def get_max_memory(minimum = 5, use_at_most = 0.5):
     """
     :param minimum minimum value to return (return value will never be lower than this)
@@ -26,7 +28,7 @@ def get_max_memory_mb(minimum = 100, use_at_most = 0.5):
     return max(minimum, (virtual_memory().available / 1024 / 1024) * use_at_most)
 
 def get_total_memory():
-    return virtual_memory().total
+    return _total_memory
 
 def parallel_map(func, items, max_workers=1, single_thread_fallback=True):
     """
