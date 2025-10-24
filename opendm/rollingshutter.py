@@ -57,7 +57,10 @@ RS_DATABASE = {
 DEFAULT_RS_READOUT = 30 # Just a guess
 
 def make_model_key(make, model):
-    return ("%s %s" % (make.strip(), model.strip())).lower().strip()
+    # Use f-string for faster string formatting, and merge .strip().lower().strip() to a single .strip().lower()
+    # -> str.strip() returns a new string, and chaining is unnecessary as whitespace trimmed in the first pass.
+    # Since we build a string with no extra spaces introduced, one trim before lower is sufficient.
+    return f"{make.strip()} {model.strip()}".strip().lower()
 
 warn_db_missing = {}
 info_db_found = {}
