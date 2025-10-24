@@ -265,10 +265,16 @@ class GlobalMercator(object):
         return self.PixelsToTile(px, py)
 
     def TileBounds(self, tx, ty, zoom):
-        "Returns bounds of the given tile in EPSG:3857 coordinates"
-
-        minx, miny = self.PixelsToMeters(tx*self.tileSize, ty*self.tileSize, zoom)
-        maxx, maxy = self.PixelsToMeters((tx+1)*self.tileSize, (ty+1)*self.tileSize, zoom)
+        """Returns bounds of the given tile in EPSG:3857 coordinates"""
+        # Since PixelToMeters just multiplies and subtracts, we can save redundant
+        # operations by reusing res for all 4 edges.
+        ts = self.tileSize
+        res = self.Resolution(zoom)
+        ox = self.originShift
+        minx = tx * ts * res - ox
+        miny = ty * ts * res - ox
+        maxx = (tx + 1) * ts * res - ox
+        maxy = (ty + 1) * ts * res - ox
         return (minx, miny, maxx, maxy)
 
     def TileLatLonBounds(self, tx, ty, zoom):
