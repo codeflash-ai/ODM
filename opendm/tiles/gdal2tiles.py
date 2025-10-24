@@ -209,7 +209,6 @@ class GlobalMercator(object):
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -223,10 +222,11 @@ class GlobalMercator(object):
     def MetersToLatLon(self, mx, my):
         "Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
 
-        lon = (mx / self.originShift) * 180.0
-        lat = (my / self.originShift) * 180.0
-
-        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+        inv_originShift = 180.0 / self.originShift
+        lon = mx * inv_originShift
+        lat = my * inv_originShift
+        pi = math.pi
+        lat = 180.0 / pi * (2.0 * math.atan(math.exp(lat * pi / 180.0)) - pi / 2.0)
         return lat, lon
 
     def PixelsToMeters(self, px, py, zoom):
@@ -303,20 +303,21 @@ class GlobalMercator(object):
         return tx, (2**zoom - 1) - ty
 
     def QuadTree(self, tx, ty, zoom):
-        "Converts TMS tile coordinates to Microsoft QuadTree"
-
-        quadKey = ""
+        """Converts TMS tile coordinates to Microsoft QuadTree"""
+        # Preallocate list for faster concatenation
+        quadKey = [''] * zoom
         ty = (2**zoom - 1) - ty
+        # Cache str for digits to avoid repeated calls in loop
+        digits = ('0', '1', '2', '3')
         for i in range(zoom, 0, -1):
             digit = 0
             mask = 1 << (i-1)
-            if (tx & mask) != 0:
+            if tx & mask:
                 digit += 1
-            if (ty & mask) != 0:
+            if ty & mask:
                 digit += 2
-            quadKey += str(digit)
-
-        return quadKey
+            quadKey[zoom - i] = digits[digit]
+        return ''.join(quadKey)
 
 
 class GlobalGeodetic(object):
