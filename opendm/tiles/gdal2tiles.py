@@ -204,12 +204,12 @@ class GlobalMercator(object):
     """
 
     def __init__(self, tileSize=256):
-        "Initialize the TMS Global Mercator pyramid"
+        """Initialize the TMS Global Mercator pyramid"""
         self.tileSize = tileSize
-        self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
+        self._tileSize_float = float(tileSize)
+        self.initialResolution = 2 * math.pi * 6378137 / tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -238,18 +238,18 @@ class GlobalMercator(object):
         return mx, my
 
     def MetersToPixels(self, mx, my, zoom):
-        "Converts EPSG:3857 to pyramid pixel coordinates in given zoom level"
-
+        """Converts EPSG:3857 to pyramid pixel coordinates in given zoom level"""
         res = self.Resolution(zoom)
-        px = (mx + self.originShift) / res
-        py = (my + self.originShift) / res
+        shift = self.originShift
+        px = (mx + shift) / res
+        py = (my + shift) / res
         return px, py
 
     def PixelsToTile(self, px, py):
-        "Returns a tile covering region in given pixel coordinates"
-
-        tx = int(math.ceil(px / float(self.tileSize)) - 1)
-        ty = int(math.ceil(py / float(self.tileSize)) - 1)
+        """Returns a tile covering region in given pixel coordinates"""
+        tsf = self._tileSize_float
+        tx = int(math.ceil(px / tsf) - 1)
+        ty = int(math.ceil(py / tsf) - 1)
         return tx, ty
 
     def PixelsToRaster(self, px, py, zoom):
@@ -259,8 +259,7 @@ class GlobalMercator(object):
         return px, mapSize - py
 
     def MetersToTile(self, mx, my, zoom):
-        "Returns tile for given mercator coordinates"
-
+        """Returns tile for given mercator coordinates"""
         px, py = self.MetersToPixels(mx, my, zoom)
         return self.PixelsToTile(px, py)
 
