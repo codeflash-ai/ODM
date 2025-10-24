@@ -209,7 +209,10 @@ class GlobalMercator(object):
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
+        self._inv_originShift = 180.0 / self.originShift
+        self._pi = math.pi
+        self._deg_per_rad = 180.0 / self._pi
+        self._pi_per_2 = self._pi / 2.0
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -221,12 +224,11 @@ class GlobalMercator(object):
         return mx, my
 
     def MetersToLatLon(self, mx, my):
-        "Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
-
-        lon = (mx / self.originShift) * 180.0
-        lat = (my / self.originShift) * 180.0
-
-        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+        """Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"""
+        # Use precomputed values for speedup
+        lon = mx * self._inv_originShift
+        lat = my * self._inv_originShift
+        lat = self._deg_per_rad * (2.0 * math.atan(math.exp(lat * self._pi / 180.0)) - self._pi_per_2)
         return lat, lon
 
     def PixelsToMeters(self, px, py, zoom):
@@ -265,19 +267,22 @@ class GlobalMercator(object):
         return self.PixelsToTile(px, py)
 
     def TileBounds(self, tx, ty, zoom):
-        "Returns bounds of the given tile in EPSG:3857 coordinates"
-
-        minx, miny = self.PixelsToMeters(tx*self.tileSize, ty*self.tileSize, zoom)
-        maxx, maxy = self.PixelsToMeters((tx+1)*self.tileSize, (ty+1)*self.tileSize, zoom)
+        """Returns bounds of the given tile in EPSG:3857 coordinates"""
+        # Reduce multiplications by saving tile size
+        ts = self.tileSize
+        # Inline PixelToMeters math for two calls, saves call overhead and speeds up computation
+        res = self.initialResolution / (2 ** zoom)
+        minx = tx * ts * res - self.originShift
+        miny = ty * ts * res - self.originShift
+        maxx = (tx + 1) * ts * res - self.originShift
+        maxy = (ty + 1) * ts * res - self.originShift
         return (minx, miny, maxx, maxy)
 
     def TileLatLonBounds(self, tx, ty, zoom):
-        "Returns bounds of the given tile in latitude/longitude using WGS84 datum"
-
+        """Returns bounds of the given tile in latitude/longitude using WGS84 datum"""
         bounds = self.TileBounds(tx, ty, zoom)
         minLat, minLon = self.MetersToLatLon(bounds[0], bounds[1])
         maxLat, maxLon = self.MetersToLatLon(bounds[2], bounds[3])
-
         return (minLat, minLon, maxLat, maxLon)
 
     def Resolution(self, zoom):
