@@ -57,41 +57,59 @@ RS_DATABASE = {
 DEFAULT_RS_READOUT = 30 # Just a guess
 
 def make_model_key(make, model):
-    return ("%s %s" % (make.strip(), model.strip())).lower().strip()
+    # Optimization: use f-string and minimize repeated strip/lower calls
+    # Reduce intermediate string creation and method chaining
+    # Preallocate, join, then process once
+    return f"{make.strip()} {model.strip()}".lower()
 
 warn_db_missing = {}
 info_db_found = {}
 
 def get_rolling_shutter_readout(photo, override_value=0):
-    global warn_db_missing
-    global info_db_found
-
+    # Avoid using global assignment; just reference (global dict mutation is fine)
     make, model = photo.camera_make, photo.camera_model
 
     if override_value > 0:
         return override_value
     
     key = make_model_key(make, model)
-    if key in RS_DATABASE:
-        rsd = RS_DATABASE[key]
-        val = DEFAULT_RS_READOUT
+    db = RS_DATABASE
 
-        if isinstance(rsd, int) or isinstance(rsd, float):
+    val = DEFAULT_RS_READOUT
+
+    # Use local variable for log for small win
+    _log = log
+
+    if key in db:
+        rsd = db[key]
+        rsd_type = type(rsd)
+        # Fast-path common types
+        if rsd_type is int or rsd_type is float:
             val = float(rsd)
         elif callable(rsd):
             val = float(rsd(photo))
         else:
-            log.ODM_WARNING("Invalid rolling shutter calibration entry, returning default of %sms" % DEFAULT_RS_READOUT)
+            _log.ODM_WARNING(
+                "Invalid rolling shutter calibration entry, returning default of %sms" % DEFAULT_RS_READOUT
+            )
 
-        if not key in info_db_found:
-            log.ODM_INFO("Rolling shutter profile for \"%s %s\" selected, using %sms as --rolling-shutter-readout." % (make, model, val))
-            info_db_found[key] = True
-        
+        info_dict = info_db_found
+        # Only call expensive logging if key missing
+        if key not in info_dict:
+            _log.ODM_INFO(
+                'Rolling shutter profile for "%s %s" selected, using %sms as --rolling-shutter-readout.'
+                % (make, model, val)
+            )
+            info_dict[key] = True
+
         return val
     else:
-        # Warn once
-        if not key in warn_db_missing:
-            log.ODM_WARNING("Rolling shutter readout time for \"%s %s\" is not in our database, using default of %sms which might be incorrect. Use --rolling-shutter-readout to set an actual value (see https://github.com/OpenDroneMap/RSCalibration for instructions on how to calculate this value)" % (make, model, DEFAULT_RS_READOUT))
-            warn_db_missing[key] = True
+        warn_dict = warn_db_missing
+        if key not in warn_dict:
+            _log.ODM_WARNING(
+                'Rolling shutter readout time for "%s %s" is not in our database, using default of %sms which might be incorrect. Use --rolling-shutter-readout to set an actual value (see https://github.com/OpenDroneMap/RSCalibration for instructions on how to calculate this value)'
+                % (make, model, DEFAULT_RS_READOUT)
+            )
+            warn_dict[key] = True
         return float(DEFAULT_RS_READOUT)
 
