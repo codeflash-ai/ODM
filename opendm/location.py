@@ -91,7 +91,8 @@ def get_utm_zone_and_hemisphere_from(lon, lat):
     :param lat latitude
     :return [utm_zone, hemisphere]
     """
-    utm_zone = (int(math.floor((lon + 180.0)/6.0)) % 60) + 1
+    # Use integer arithmetic for faster calculation
+    utm_zone = ((int((lon + 180) // 6) % 60) + 1)
     hemisphere = 'S' if lat < 0 else 'N'
     return [utm_zone, hemisphere]
 
@@ -119,48 +120,46 @@ def parse_srs_header(header):
     :param header (str) line
     :return Proj object
     """
-    header = header.strip()
-    ref = header.split(' ')
+    hdr = header.strip()
+    # Use split with maxsplit for less work
+    ref = hdr.split(' ', 2)
 
     try:
-        if ref[0] == 'WGS84' and ref[1] == 'UTM':
+        if len(ref) >= 3 and ref[0] == 'WGS84' and ref[1] == 'UTM':
             datum = ref[0]
-            utm_pole = (ref[2][len(ref[2]) - 1]).upper()
-            utm_zone = int(ref[2][:len(ref[2]) - 1])
-            
-            proj_args = {
-                'zone': utm_zone, 
-                'datum': datum
-            }
-
-            proj4 = '+proj=utm +zone={zone} +datum={datum} +units=m +no_defs=True'
+            utm_pole = ref[2][-1].upper()
+            utm_zone = int(ref[2][:-1])
+            proj4 = f'+proj=utm +zone={utm_zone} +datum={datum} +units=m +no_defs'
             if utm_pole == 'S':
-                proj4 += ' +south=True'
-
-            srs = CRS.from_proj4(proj4.format(**proj_args))
-        elif '+proj' in header:
-            srs = CRS.from_proj4(header.strip('\''))
-        elif header.lower().startswith("epsg:"):
-            srs = CRS.from_epsg(header.lower()[5:])
+                proj4 += ' +south'
+            srs = CRS.from_proj4(proj4)
+        elif '+proj' in hdr:
+            # Avoid repeated strip
+            srs = CRS.from_proj4(hdr.strip('\''))
+        elif hdr.lower().startswith("epsg:"):
+            # Use slicing directly for speed
+            srs = CRS.from_epsg(hdr[5:].strip())
         else:
             raise RuntimeError('Could not parse coordinates. Bad SRS supplied: %s' % header)
     except RuntimeError as e:
-        log.ODM_ERROR('Uh oh! There seems to be a problem with your coordinates/GCP file.\n\n'
-                            'The line: %s\n\n'
-                            'Is not valid. Projections that are valid include:\n'
-                            ' - EPSG:*****\n'
-                            ' - WGS84 UTM **(N|S)\n'
-                            ' - Any valid proj4 string (for example, +proj=utm +zone=32 +north +ellps=WGS84 +datum=WGS84 +units=m +no_defs)\n\n'
-                            ' Some valid EPSG codes are not yet available in OpenDroneMap and need substituted with valid proj4 strings\n'
-                            ' Try searching for equivalent proj4 strings at spatialreference.org or epsg.io.\n'
-                            'Modify your input and try again.' % header)
+        log.ODM_ERROR(
+            'Uh oh! There seems to be a problem with your coordinates/GCP file.\n\n'
+            f'The line: {header}\n\n'
+            'Is not valid. Projections that are valid include:\n'
+            ' - EPSG:*****\n'
+            ' - WGS84 UTM **(N|S)\n'
+            ' - Any valid proj4 string (for example, +proj=utm +zone=32 +north +ellps=WGS84 +datum=WGS84 +units=m +no_defs)\n\n'
+            ' Some valid EPSG codes are not yet available in OpenDroneMap and need substituted with valid proj4 strings\n'
+            ' Try searching for equivalent proj4 strings at spatialreference.org or epsg.io.\n'
+            'Modify your input and try again.'
+        )
         raise RuntimeError(e)
-    
+
     return srs
 
 def utm_srs_from_ll(lon, lat):
     utm_zone, hemisphere = get_utm_zone_and_hemisphere_from(lon, lat)
-    return parse_srs_header("WGS84 UTM %s%s" % (utm_zone, hemisphere))
+    return parse_srs_header(f"WGS84 UTM {utm_zone}{hemisphere}")
 
 def utm_transformers_from_ll(lon, lat):
     source_srs = CRS.from_epsg(4326)
