@@ -2,6 +2,7 @@ import math
 from opendm import log
 from pyproj import Proj, Transformer, CRS
 from osgeo import osr
+from functools import lru_cache
 
 def extract_utm_coords(photos, images_path, output_coords_file):
     """
@@ -80,10 +81,9 @@ def proj_srs_convert(srs):
     return res
 
 def transformer(from_srs, to_srs):
-    src = proj_srs_convert(from_srs)
-    tgt = proj_srs_convert(to_srs)
-    return osr.CoordinateTransformation(src, tgt)
-    
+    from_key = _srs_to_key(from_srs)
+    to_key = _srs_to_key(to_srs)
+    return _cached_transformer(from_key, to_key)
 def get_utm_zone_and_hemisphere_from(lon, lat):
     """
     Calculate the UTM zone and hemisphere that a longitude/latitude pair falls on
@@ -168,3 +168,29 @@ def utm_transformers_from_ll(lon, lat):
     ll_to_utm = transformer(source_srs, target_srs)
     utm_to_ll = transformer(target_srs, source_srs)
     return ll_to_utm, utm_to_ll
+
+def _srs_to_key(srs):
+    epsg = srs.to_epsg()
+    if epsg:
+        return ('epsg', epsg)
+    else:
+        return ('proj4', srs.to_proj4())
+
+@lru_cache(maxsize=64)
+def _cached_proj_srs_convert(srs_key):
+    key_type, key_value = srs_key
+    res = osr.SpatialReference()
+    
+    if key_type == 'epsg':
+        res.ImportFromEPSG(key_value)
+    else:
+        res.ImportFromProj4(key_value)
+    
+    res.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    return res
+
+@lru_cache(maxsize=64)
+def _cached_transformer(from_key, to_key):
+    src = _cached_proj_srs_convert(from_key)
+    tgt = _cached_proj_srs_convert(to_key)
+    return osr.CoordinateTransformation(src, tgt)
