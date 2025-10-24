@@ -1,7 +1,9 @@
 import math
 from opendm import log
-from pyproj import Proj, Transformer, CRS
+from pyproj import Proj, CRS
 from osgeo import osr
+
+_TRANSFORM_CACHE = {}
 
 def extract_utm_coords(photos, images_path, output_coords_file):
     """
@@ -57,7 +59,15 @@ def extract_utm_coords(photos, images_path, output_coords_file):
             f.write("%s %s %s\n" % (coord[0] - dx, coord[1] - dy, coord[2]))
     
 def transform2(from_srs, to_srs, x, y):
-    return transformer(from_srs, to_srs).TransformPoint(x, y, 0)[:2]
+    key = (from_srs.to_epsg(), from_srs.to_proj4(), to_srs.to_epsg(), to_srs.to_proj4())
+    try:
+        ct = _TRANSFORM_CACHE[key]
+    except KeyError:
+        src = proj_srs_convert(from_srs)
+        tgt = proj_srs_convert(to_srs)
+        ct = osr.CoordinateTransformation(src, tgt)
+        _TRANSFORM_CACHE[key] = ct
+    return ct.TransformPoint(x, y, 0)[:2]
 
 def transform3(from_srs, to_srs, x, y, z):
     return transformer(from_srs, to_srs).TransformPoint(x, y, z)
