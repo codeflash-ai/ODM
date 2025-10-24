@@ -206,6 +206,7 @@ class GlobalMercator(object):
     def __init__(self, tileSize=256):
         "Initialize the TMS Global Mercator pyramid"
         self.tileSize = tileSize
+        self.invTileSize = 1.0 / tileSize
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
@@ -248,8 +249,8 @@ class GlobalMercator(object):
     def PixelsToTile(self, px, py):
         "Returns a tile covering region in given pixel coordinates"
 
-        tx = int(math.ceil(px / float(self.tileSize)) - 1)
-        ty = int(math.ceil(py / float(self.tileSize)) - 1)
+        tx = int(math.ceil(px * self.invTileSize) - 1)
+        ty = int(math.ceil(py * self.invTileSize) - 1)
         return tx, ty
 
     def PixelsToRaster(self, px, py, zoom):
