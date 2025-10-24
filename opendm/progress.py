@@ -14,6 +14,8 @@ class Broadcaster:
         self.port = port
         self.project_name = "<unnamed>"
         self.pid = os.getpid()
+        self.UDP_IP = "127.0.0.1"
+        self.message_prefix = f"PGUP/{self.pid}/{self.project_name}/"
 
     def set_project_name(self, project_name):
         self.project_name = project_name
@@ -25,15 +27,13 @@ class Broadcaster:
         if not sock:
             return
 
-        UDP_IP = "127.0.0.1"
-
         if global_progress > 100:
             log.ODM_WARNING("Global progress is > 100 (%s), please contact the developers." % global_progress)
             global_progress = 100
 
         try:
-            sock.sendto("PGUP/{}/{}/{}".format(self.pid, self.project_name, float(global_progress)).encode('utf8'), 
-                        (UDP_IP, self.port))
+            sock.sendto((self.message_prefix + str(float(global_progress))).encode('utf8'), 
+                        (self.UDP_IP, self.port))
         except Exception as e:
             log.ODM_WARNING("Failed to broadcast progress update on UDP port %s (%s)" % (str(self.port), str(e)))
 
