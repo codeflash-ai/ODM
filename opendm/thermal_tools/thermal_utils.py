@@ -109,9 +109,10 @@ def parse_from_exif_str(temp_str):
 
 def normalize_temp_matrix(thermal_np):
     """Normalize a temperature matrix to the 0-255 uint8 image range."""
-    num = thermal_np - np.amin(thermal_np)
-    den = np.amax(thermal_np) - np.amin(thermal_np)
-    thermal_np = num / den
+    min_val = np.amin(thermal_np)
+    max_val = np.amax(thermal_np)
+    den = max_val - min_val
+    thermal_np = (thermal_np - min_val) / den
     return thermal_np
 
 def clip_temp_to_roi(thermal_np, thermal_roi_values):
