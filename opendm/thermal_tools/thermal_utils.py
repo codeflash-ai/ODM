@@ -42,9 +42,7 @@ def sensor_vals_to_temp(
     tau1 = ATX * np.exp(-np.sqrt(ObjectDistance / 2) * (ATA1 + ATB1 * np.sqrt(h2o))) + (1 - ATX) * np.exp(
         -np.sqrt(ObjectDistance / 2) * (ATA2 + ATB2 * np.sqrt(h2o))
     )
-    tau2 = ATX * np.exp(-np.sqrt(ObjectDistance / 2) * (ATA1 + ATB1 * np.sqrt(h2o))) + (1 - ATX) * np.exp(
-        -np.sqrt(ObjectDistance / 2) * (ATA2 + ATB2 * np.sqrt(h2o))
-    )
+    tau2 = tau1
     # radiance from the environment
     raw_refl1 = PlanckR1 / (PlanckR2 * (np.exp(PlanckB / (ReflectedApparentTemperature + 273.15)) - PlanckF)) - PlanckO
     
@@ -68,17 +66,13 @@ def sensor_vals_to_temp(
         emiss_wind / Emissivity / tau1 / IRWindowTransmission * raw_wind
     )  
     # Reflection from window due to external objects
-    raw_refl2 = (
-        PlanckR1 / (PlanckR2 * (np.exp(PlanckB / (ReflectedApparentTemperature + 273.15)) - PlanckF)) - PlanckO
-    )  
+    raw_refl2 = raw_refl1
     # component due to window reflectivity
     raw_refl2_attn = (
         refl_wind / Emissivity / tau1 / IRWindowTransmission * raw_refl2
     )  
     # Emission from atmosphere 2
-    raw_atm2 = (
-        PlanckR1 / (PlanckR2 * (np.exp(PlanckB / (AtmosphericTemperature + 273.15)) - PlanckF)) - PlanckO
-    )  
+    raw_atm2 = raw_atm1
     # attenuation for atmospheric 2 emission
     raw_atm2_attn = (
         (1 - tau2) / Emissivity / tau1 / IRWindowTransmission / tau2 * raw_atm2
