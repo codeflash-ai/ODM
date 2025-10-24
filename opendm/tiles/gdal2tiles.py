@@ -51,6 +51,14 @@ from xml.etree import ElementTree
 from osgeo import gdal
 from osgeo import osr
 
+_INV_PI = 1.0 / math.pi
+
+_HALF_PI = math.pi / 2.0
+
+_RAD_TO_DEG = 180.0 / math.pi
+
+_DEG_TO_RAD = math.pi / 180.0
+
 try:
     from PIL import Image
     import numpy
@@ -204,12 +212,11 @@ class GlobalMercator(object):
     """
 
     def __init__(self, tileSize=256):
-        "Initialize the TMS Global Mercator pyramid"
+        """Initialize the TMS Global Mercator pyramid"""
         self.tileSize = tileSize
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -221,12 +228,17 @@ class GlobalMercator(object):
         return mx, my
 
     def MetersToLatLon(self, mx, my):
-        "Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
+        """Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"""
+        # Avoid attribute lookups and minimize repeated computation
 
-        lon = (mx / self.originShift) * 180.0
-        lat = (my / self.originShift) * 180.0
+        originShift = self.originShift
+        lon = (mx / originShift) * 180.0
+        # Compute intermediate value for latitude
+        lat = (my / originShift) * 180.0
 
-        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+        # Fast path: minimize attribute lookups and localize using constants
+        rad = lat * _DEG_TO_RAD
+        lat = _RAD_TO_DEG * (2.0 * math.atan(math.exp(rad)) - _HALF_PI)
         return lat, lon
 
     def PixelsToMeters(self, px, py, zoom):
