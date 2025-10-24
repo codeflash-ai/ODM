@@ -204,12 +204,13 @@ class GlobalMercator(object):
     """
 
     def __init__(self, tileSize=256):
-        "Initialize the TMS Global Mercator pyramid"
+        """Initialize the TMS Global Mercator pyramid"""
         self.tileSize = tileSize
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
+        # Cache powers of 2 for zoom levels up to a reasonable maximum to optimize repeated calls
+        self._power_of_2_cache = {}
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -223,10 +224,11 @@ class GlobalMercator(object):
     def MetersToLatLon(self, mx, my):
         "Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
 
-        lon = (mx / self.originShift) * 180.0
-        lat = (my / self.originShift) * 180.0
-
-        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+        inv_originShift = 180.0 / self.originShift
+        lon = mx * inv_originShift
+        lat = my * inv_originShift
+        pi = math.pi
+        lat = 180.0 / pi * (2.0 * math.atan(math.exp(lat * pi / 180.0)) - pi / 2.0)
         return lat, lon
 
     def PixelsToMeters(self, px, py, zoom):
@@ -297,10 +299,16 @@ class GlobalMercator(object):
                     return 0    # We don't want to scale up
 
     def GoogleTile(self, tx, ty, zoom):
-        "Converts TMS tile coordinates to Google Tile coordinates"
+        """Converts TMS tile coordinates to Google Tile coordinates"""
 
         # coordinate origin is moved from bottom-left to top-left corner of the extent
-        return tx, (2**zoom - 1) - ty
+        # Keep a small local cache for zoom powers, as this method is called very frequently.
+        if zoom in self._power_of_2_cache:
+            max_index = self._power_of_2_cache[zoom]
+        else:
+            max_index = 2 ** zoom - 1
+            self._power_of_2_cache[zoom] = max_index
+        return tx, max_index - ty
 
     def QuadTree(self, tx, ty, zoom):
         "Converts TMS tile coordinates to Microsoft QuadTree"
