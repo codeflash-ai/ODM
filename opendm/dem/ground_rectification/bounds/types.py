@@ -37,6 +37,7 @@ class PolyBounds(object):
         return self._corners
 
 class BoxBounds(object):
+
     def __init__(self, x_min, x_max, y_min, y_max):
         self._corners = (x_min, x_max, y_min, y_max)
 
@@ -76,9 +77,11 @@ class BoxBounds(object):
         """Divide the box into four boxes, marked by the point. It is assumed that the point is inside the box"""
         [x_point, y_point] = point
         (x_min, x_max, y_min, y_max) = self._corners
+        x_point_eps = x_point + EPSILON
+        y_point_eps = y_point + EPSILON
         return [
             BoxBounds(x_min, x_point,           y_min, y_point),
-            BoxBounds(x_point + EPSILON, x_max, y_min, y_point),
-            BoxBounds(x_min, x_point,           y_point + EPSILON, y_max),
-            BoxBounds(x_point + EPSILON, x_max, y_point + EPSILON, y_max)
+            BoxBounds(x_point_eps, x_max, y_min, y_point),
+            BoxBounds(x_min, x_point,           y_point_eps, y_max),
+            BoxBounds(x_point_eps, x_max, y_point_eps, y_max)
         ]
