@@ -11,6 +11,7 @@ class PolyBounds(object):
         [x_min, y_min] = np.amin(points, axis=0)
         [x_max, y_max] = np.amax(points, axis=0)
         self._corners = (x_min, x_max, y_min, y_max)
+        self._center = ((x_min + x_max) / 2, (y_min + y_max) / 2)
 
     def keep_points_inside(self, point_cloud):
         """Return a new point cloud with the points from the given cloud that are inside the bounds"""
@@ -30,8 +31,7 @@ class PolyBounds(object):
         return self.__delaunay.find_simplex(points) >= 0
 
     def center(self):
-        (x_min, x_max, y_min, y_max) = self._corners
-        return ((x_min + x_max) / 2, (y_min + y_max) / 2)
+        return self._center
 
     def corners(self):
         return self._corners
