@@ -51,6 +51,8 @@ from xml.etree import ElementTree
 from osgeo import gdal
 from osgeo import osr
 
+_EPSG_SRS_CACHE = {}
+
 try:
     from PIL import Image
     import numpy
@@ -209,7 +211,6 @@ class GlobalMercator(object):
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -223,10 +224,11 @@ class GlobalMercator(object):
     def MetersToLatLon(self, mx, my):
         "Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
 
-        lon = (mx / self.originShift) * 180.0
-        lat = (my / self.originShift) * 180.0
-
-        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+        inv_originShift = 180.0 / self.originShift
+        lon = mx * inv_originShift
+        lat = my * inv_originShift
+        pi = math.pi
+        lat = 180.0 / pi * (2.0 * math.atan(math.exp(lat * pi / 180.0)) - pi / 2.0)
         return lat, lon
 
     def PixelsToMeters(self, px, py, zoom):
@@ -712,12 +714,14 @@ def setup_output_srs(input_srs, options):
     """
     Setup the desired SRS (based on options)
     """
-    output_srs = osr.SpatialReference()
+    profile = options.profile
 
-    if options.profile == 'mercator':
-        output_srs.ImportFromEPSG(3857)
-    elif options.profile == 'geodetic':
-        output_srs.ImportFromEPSG(4326)
+    # Use cached instances for standard profiles; else copy input_srs
+    if profile == 'mercator':
+        # Use a clone to avoid potential mutation of cached SRS
+        output_srs = _get_epsg_srs(3857).Clone()
+    elif profile == 'geodetic':
+        output_srs = _get_epsg_srs(4326).Clone()
     else:
         output_srs = input_srs
 
@@ -1347,9 +1351,9 @@ class TileJobInfo(object):
     options = None
 
     def __init__(self, **kwargs):
-        for key in kwargs:
+        for key, value in kwargs.items():
             if hasattr(self, key):
-                setattr(self, key, kwargs[key])
+                setattr(self, key, value)
 
     def __unicode__(self):
         return "TileJobInfo %s\n" % (self.src_file)
@@ -1358,7 +1362,7 @@ class TileJobInfo(object):
         return "TileJobInfo %s\n" % (self.src_file)
 
     def __repr__(self):
-        return "TileJobInfo %s\n" % (self.src_file)
+        return f"TileJobInfo {self.src_file}\n"
 
 
 class Gdal2TilesError(Exception):
@@ -2941,6 +2945,14 @@ def main():
         single_threaded_tiling(input_file, output_folder, options)
     else:
         multi_threaded_tiling(input_file, output_folder, options)
+
+def _get_epsg_srs(epsg_code):
+    srs = _EPSG_SRS_CACHE.get(epsg_code)
+    if srs is None:
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(epsg_code)
+        _EPSG_SRS_CACHE[epsg_code] = srs
+    return srs
 
 
 if __name__ == '__main__':
