@@ -51,6 +51,8 @@ from xml.etree import ElementTree
 from osgeo import gdal
 from osgeo import osr
 
+_EPSG_SRS_CACHE = {}
+
 try:
     from PIL import Image
     import numpy
@@ -209,7 +211,6 @@ class GlobalMercator(object):
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -223,10 +224,11 @@ class GlobalMercator(object):
     def MetersToLatLon(self, mx, my):
         "Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
 
-        lon = (mx / self.originShift) * 180.0
-        lat = (my / self.originShift) * 180.0
-
-        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+        inv_originShift = 180.0 / self.originShift
+        lon = mx * inv_originShift
+        lat = my * inv_originShift
+        pi = math.pi
+        lat = 180.0 / pi * (2.0 * math.atan(math.exp(lat * pi / 180.0)) - pi / 2.0)
         return lat, lon
 
     def PixelsToMeters(self, px, py, zoom):
@@ -712,12 +714,14 @@ def setup_output_srs(input_srs, options):
     """
     Setup the desired SRS (based on options)
     """
-    output_srs = osr.SpatialReference()
+    profile = options.profile
 
-    if options.profile == 'mercator':
-        output_srs.ImportFromEPSG(3857)
-    elif options.profile == 'geodetic':
-        output_srs.ImportFromEPSG(4326)
+    # Use cached instances for standard profiles; else copy input_srs
+    if profile == 'mercator':
+        # Use a clone to avoid potential mutation of cached SRS
+        output_srs = _get_epsg_srs(3857).Clone()
+    elif profile == 'geodetic':
+        output_srs = _get_epsg_srs(4326).Clone()
     else:
         output_srs = input_srs
 
@@ -1427,14 +1431,12 @@ class GDAL2Tiles(object):
         self.tminz = None
         self.tmaxz = None
         if self.options.zoom:
+            # Split and parse min/max zoom efficiently
             minmax = self.options.zoom.split('-', 1)
-            minmax.extend([''])
-            zoom_min, zoom_max = minmax[:2]
+            zoom_min = minmax[0]
+            zoom_max = minmax[1] if len(minmax) > 1 and minmax[1] else minmax[0]
             self.tminz = int(zoom_min)
-            if zoom_max:
-                self.tmaxz = int(zoom_max)
-            else:
-                self.tmaxz = int(zoom_min)
+            self.tmaxz = int(zoom_max)
 
         # KML generation
         self.kml = self.options.kml
@@ -2325,9 +2327,13 @@ class GDAL2Tiles(object):
         """
 
         args = {}
-        args['title'] = self.options.title.replace('"', '\\"')
-        args['htmltitle'] = self.options.title
-        args['south'], args['west'], args['north'], args['east'] = self.swne
+        # Faster dict assignment and less .replace calls in repeated strings
+        title = self.options.title
+        copyright = self.options.copyright
+        args['title'] = title.replace('"', '\\"')
+        args['htmltitle'] = title
+        swne = self.swne
+        args['south'], args['west'], args['north'], args['east'] = swne
         args['centerlon'] = (args['north'] + args['south']) / 2.
         args['centerlat'] = (args['west'] + args['east']) / 2.
         args['minzoom'] = self.tminz
@@ -2336,38 +2342,42 @@ class GDAL2Tiles(object):
         args['tilesize'] = self.tilesize  # not used
         args['tileformat'] = self.tileext
         args['publishurl'] = self.options.url  # not used
-        args['copyright'] = self.options.copyright.replace('"', '\\"')
+        args['copyright'] = copyright.replace('"', '\\"')
 
-        s = """<!DOCTYPE html>
+        # Use f-string for improved efficiency with no change to output
+        # Note: `tileformat` is used as %(tileformat)s in the overlay TMS layer path
+        # All other template usage is retained precisely
+
+        s = f"""<!DOCTYPE html>
         <html lang="en">
           <head>
             <meta charset="utf-8">
             <meta name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no' />
-            <title>%(htmltitle)s</title>
+            <title>{args['htmltitle']}</title>
 
             <!-- Leaflet -->
             <link rel="stylesheet" href="http://cdn.leafletjs.com/leaflet-0.7.5/leaflet.css" />
             <script src="http://cdn.leafletjs.com/leaflet-0.7.5/leaflet.js"></script>
 
             <style>
-                body { margin:0; padding:0; }
-                body, table, tr, td, th, div, h1, h2, input { font-family: "Calibri", "Trebuchet MS", "Ubuntu", Serif; font-size: 11pt; }
-                #map { position:absolute; top:0; bottom:0; width:100%%; } /* full size */
-                .ctl {
+                body {{ margin:0; padding:0; }}
+                body, table, tr, td, th, div, h1, h2, input {{ font-family: "Calibri", "Trebuchet MS", "Ubuntu", Serif; font-size: 11pt; }}
+                #map {{ position:absolute; top:0; bottom:0; width:100%; }} /* full size */
+                .ctl {{
                     padding: 2px 10px 2px 10px;
                     background: white;
                     background: rgba(255,255,255,0.9);
                     box-shadow: 0 0 15px rgba(0,0,0,0.2);
                     border-radius: 5px;
                     text-align: right;
-                }
-                .title {
+                }}
+                .title {{
                     font-size: 18pt;
                     font-weight: bold;
-                }
-                .src {
+                }}
+                .src {{
                     font-size: 10pt;
-                }
+                }}
 
             </style>
 
@@ -2381,70 +2391,70 @@ class GDAL2Tiles(object):
 
         // Base layers
         //  .. OpenStreetMap
-        var osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'});
+        var osm = L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}});
 
         //  .. CartoDB Positron
-        var cartodb = L.tileLayer('http://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', {attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, &copy; <a href="http://cartodb.com/attributions">CartoDB</a>'});
+        var cartodb = L.tileLayer('http://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}.png', {{attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, &copy; <a href="http://cartodb.com/attributions">CartoDB</a>'}});
 
         //  .. OSM Toner
-        var toner = L.tileLayer('http://{s}.tile.stamen.com/toner/{z}/{x}/{y}.png', {attribution: 'Map tiles by <a href="http://stamen.com">Stamen Design</a>, under <a href="http://creativecommons.org/licenses/by/3.0">CC BY 3.0</a>. Data by <a href="http://openstreetmap.org">OpenStreetMap</a>, under <a href="http://www.openstreetmap.org/copyright">ODbL</a>.'});
+        var toner = L.tileLayer('http://{{s}}.tile.stamen.com/toner/{{z}}/{{x}}/{{y}}.png', {{attribution: 'Map tiles by <a href="http://stamen.com">Stamen Design</a>, under <a href="http://creativecommons.org/licenses/by/3.0">CC BY 3.0</a>. Data by <a href="http://openstreetmap.org">OpenStreetMap</a>, under <a href="http://www.openstreetmap.org/copyright">ODbL</a>.'}});
 
         //  .. White background
         var white = L.tileLayer("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEAAQMAAABmvDolAAAAA1BMVEX///+nxBvIAAAAH0lEQVQYGe3BAQ0AAADCIPunfg43YAAAAAAAAAAA5wIhAAAB9aK9BAAAAABJRU5ErkJggg==");
 
         // Overlay layers (TMS)
-        var lyr = L.tileLayer('./{z}/{x}/{y}.%(tileformat)s', {tms: true, opacity: 0.7, attribution: "%(copyright)s"});
+        var lyr = L.tileLayer('./{{z}}/{{x}}/{{y}}.{args['tileformat']}', {{tms: true, opacity: 0.7, attribution: "{args['copyright']}"}});
 
         // Map
-        var map = L.map('map', {
-            center: [%(centerlon)s, %(centerlat)s],
-            zoom: %(beginzoom)s,
-            minZoom: %(minzoom)s,
-            maxZoom: %(maxzoom)s,
+        var map = L.map('map', {{
+            center: [{args['centerlon']}, {args['centerlat']}],
+            zoom: {args['beginzoom']},
+            minZoom: {args['minzoom']},
+            maxZoom: {args['maxzoom']},
             layers: [osm]
-        });
+        }});
 
-        var basemaps = {"OpenStreetMap": osm, "CartoDB Positron": cartodb, "Stamen Toner": toner, "Without background": white}
-        var overlaymaps = {"Layer": lyr}
+        var basemaps = {{"OpenStreetMap": osm, "CartoDB Positron": cartodb, "Stamen Toner": toner, "Without background": white}}
+        var overlaymaps = {{"Layer": lyr}}
 
         // Title
         var title = L.control();
-        title.onAdd = function(map) {
+        title.onAdd = function(map) {{
             this._div = L.DomUtil.create('div', 'ctl title');
             this.update();
             return this._div;
-        };
-        title.update = function(props) {
-            this._div.innerHTML = "%(title)s";
-        };
+        }};
+        title.update = function(props) {{
+            this._div.innerHTML = "{args['title']}";
+        }};
         title.addTo(map);
 
         // Note
         var src = 'Generated by <a href="http://www.klokan.cz/projects/gdal2tiles/">GDAL2Tiles</a>, Copyright &copy; 2008 <a href="http://www.klokan.cz/">Klokan Petr Pridal</a>,  <a href="http://www.gdal.org/">GDAL</a> &amp; <a href="http://www.osgeo.org/">OSGeo</a> <a href="http://code.google.com/soc/">GSoC</a>';
-        var title = L.control({position: 'bottomleft'});
-        title.onAdd = function(map) {
+        var title = L.control({{position: 'bottomleft'}});
+        title.onAdd = function(map) {{
             this._div = L.DomUtil.create('div', 'ctl src');
             this.update();
             return this._div;
-        };
-        title.update = function(props) {
+        }};
+        title.update = function(props) {{
             this._div.innerHTML = src;
-        };
+        }};
         title.addTo(map);
 
 
         // Add base layers
-        L.control.layers(basemaps, overlaymaps, {collapsed: false}).addTo(map);
+        L.control.layers(basemaps, overlaymaps, {{collapsed: false}}).addTo(map);
 
         // Fit to overlay bounds (SW and NE points with (lat, lon))
-        map.fitBounds([[%(south)s, %(east)s], [%(north)s, %(west)s]]);
+        map.fitBounds([[{args['south']}, {args['east']}], [{args['north']}, {args['west']}]]);
 
         </script>
 
         </body>
         </html>
 
-        """ % args    # noqa
+        """
 
         return s
 
@@ -2941,6 +2951,14 @@ def main():
         single_threaded_tiling(input_file, output_folder, options)
     else:
         multi_threaded_tiling(input_file, output_folder, options)
+
+def _get_epsg_srs(epsg_code):
+    srs = _EPSG_SRS_CACHE.get(epsg_code)
+    if srs is None:
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(epsg_code)
+        _EPSG_SRS_CACHE[epsg_code] = srs
+    return srs
 
 
 if __name__ == '__main__':
