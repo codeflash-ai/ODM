@@ -51,6 +51,8 @@ from xml.etree import ElementTree
 from osgeo import gdal
 from osgeo import osr
 
+_EPSG_SRS_CACHE = {}
+
 try:
     from PIL import Image
     import numpy
@@ -209,7 +211,6 @@ class GlobalMercator(object):
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -223,10 +224,11 @@ class GlobalMercator(object):
     def MetersToLatLon(self, mx, my):
         "Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
 
-        lon = (mx / self.originShift) * 180.0
-        lat = (my / self.originShift) * 180.0
-
-        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+        inv_originShift = 180.0 / self.originShift
+        lon = mx * inv_originShift
+        lat = my * inv_originShift
+        pi = math.pi
+        lat = 180.0 / pi * (2.0 * math.atan(math.exp(lat * pi / 180.0)) - pi / 2.0)
         return lat, lon
 
     def PixelsToMeters(self, px, py, zoom):
@@ -712,12 +714,14 @@ def setup_output_srs(input_srs, options):
     """
     Setup the desired SRS (based on options)
     """
-    output_srs = osr.SpatialReference()
+    profile = options.profile
 
-    if options.profile == 'mercator':
-        output_srs.ImportFromEPSG(3857)
-    elif options.profile == 'geodetic':
-        output_srs.ImportFromEPSG(4326)
+    # Use cached instances for standard profiles; else copy input_srs
+    if profile == 'mercator':
+        # Use a clone to avoid potential mutation of cached SRS
+        output_srs = _get_epsg_srs(3857).Clone()
+    elif profile == 'geodetic':
+        output_srs = _get_epsg_srs(4326).Clone()
     else:
         output_srs = input_srs
 
@@ -2456,25 +2460,29 @@ class GDAL2Tiles(object):
         title, bingkey, north, south, east, west, minzoom, maxzoom, tilesize, tileformat, publishurl
         """
 
-        args = {}
-        args['title'] = self.options.title
-        args['bingkey'] = self.options.bingkey
-        args['south'], args['west'], args['north'], args['east'] = self.swne
-        args['minzoom'] = self.tminz
-        args['maxzoom'] = self.tmaxz
-        args['tilesize'] = self.tilesize
-        args['tileformat'] = self.tileext
-        args['publishurl'] = self.options.url
-        args['copyright'] = self.options.copyright
-        if self.options.tmscompatible:
-            args['tmsoffset'] = "-1"
-        else:
-            args['tmsoffset'] = ""
+        args = {
+            'title': self.options.title,
+            'bingkey': self.options.bingkey,
+            'south': self.swne[0], 'west': self.swne[1], 'north': self.swne[2], 'east': self.swne[3],
+            'minzoom': self.tminz,
+            'maxzoom': self.tmaxz,
+            'tilesize': self.tilesize,
+            'tileformat': self.tileext,
+            'publishurl': self.options.url,
+            'copyright': self.options.copyright,
+        }
+        args['tmsoffset'] = "-1" if self.options.tmscompatible else ""
+
+        # Pre-calculate raster parameters for profile == 'raster'
         if self.options.profile == 'raster':
-            args['rasterzoomlevels'] = self.tmaxz+1
+            args['rasterzoomlevels'] = self.tmaxz + 1
             args['rastermaxresolution'] = 2**(self.nativezoom) * self.out_gt[1]
 
-        s = r"""<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+        # Build HTML string blocks efficiently using a list and join
+        html_parts = []
+
+        # Top level styles/header
+        html_parts.append(r"""<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
         <html xmlns="http://www.w3.org/1999/xhtml"
           <head>
             <title>%(title)s</title>
@@ -2488,14 +2496,16 @@ class GDAL2Tiles(object):
             #map { height: 95%%; border: 1px solid #888; }
             .olImageLoadError { display: none; }
             .olControlLayerSwitcher .layersDiv { border-radius: 10px 0 0 10px; }
-        </style>""" % args    # noqa
+        </style>""" % args)
 
+        # JS for Google Maps API for mercator profile only (avoid condition inside append to minimize string formatting calls)
         if self.options.profile == 'mercator':
-            s += """
+            html_parts.append("""
             <script src='http://maps.google.com/maps/api/js?sensor=false&v=3.7'></script>
-            """ % args
+            """)
 
-        s += """
+        # OpenLayers JS common block
+        html_parts.append("""
             <script src="http://www.openlayers.org/api/2.12/OpenLayers.js"></script>
             <script>
               var map;
@@ -2505,10 +2515,12 @@ class GDAL2Tiles(object):
               var emptyTileURL = "http://www.maptiler.org/img/none.png";
               OpenLayers.IMAGE_RELOAD_ATTEMPTS = 3;
 
-              function init(){""" % args
+              function init(){""" % args)
 
-        if self.options.profile == 'mercator':
-            s += """
+        # Profile-dependent blocks
+        profile = self.options.profile
+        if profile == 'mercator':
+            html_parts.append("""
                   var options = {
                       div: "map",
                       controls: [],
@@ -2586,10 +2598,9 @@ class GDAL2Tiles(object):
                   switcherControl.maximizeControl();
 
                   map.zoomToExtent(mapBounds.transform(map.displayProjection, map.projection));
-          """ % args    # noqa
-
-        elif self.options.profile == 'geodetic':
-            s += """
+          """ % args)
+        elif profile == 'geodetic':
+            html_parts.append("""
                   var options = {
                       div: "map",
                       controls: [],
@@ -2624,10 +2635,9 @@ class GDAL2Tiles(object):
                   switcherControl.maximizeControl();
 
                   map.zoomToExtent(mapBounds);
-           """ % args   # noqa
-
-        elif self.options.profile == 'raster':
-            s += """
+           """ % args)
+        elif profile == 'raster':
+            html_parts.append("""
                   var options = {
                       div: "map",
                       controls: [],
@@ -2648,19 +2658,21 @@ class GDAL2Tiles(object):
 
                   map.addLayer(layer);
                   map.zoomToExtent(mapBounds);
-        """ % args    # noqa
+        """ % args)
 
-        s += """
+        # Controls always added
+        html_parts.append("""
                   map.addControls([new OpenLayers.Control.PanZoomBar(),
                                    new OpenLayers.Control.Navigation(),
                                    new OpenLayers.Control.MousePosition(),
                                    new OpenLayers.Control.ArgParser(),
                                    new OpenLayers.Control.Attribution()]);
               }
-        """ % args
+        """)
 
-        if self.options.profile == 'mercator':
-            s += """
+        # Profile-dependent getURL js block
+        if profile == 'mercator':
+            html_parts.append("""
               function getURL(bounds) {
                   bounds = this.adjustBounds(bounds);
                   var res = this.getServerResolution();
@@ -2681,10 +2693,9 @@ class GDAL2Tiles(object):
                       return emptyTileURL;
                   }
               }
-            """ % args    # noqa
-
-        elif self.options.profile == 'geodetic':
-            s += """
+            """ % args)
+        elif profile == 'geodetic':
+            html_parts.append("""
               function getURL(bounds) {
                   bounds = this.adjustBounds(bounds);
                   var res = this.getServerResolution();
@@ -2702,10 +2713,9 @@ class GDAL2Tiles(object):
                       return emptyTileURL;
                   }
               }
-            """ % args    # noqa
-
-        elif self.options.profile == 'raster':
-            s += """
+            """ % args)
+        elif profile == 'raster':
+            html_parts.append("""
               function getURL(bounds) {
                   bounds = this.adjustBounds(bounds);
                   var res = this.getServerResolution();
@@ -2723,9 +2733,10 @@ class GDAL2Tiles(object):
                       return emptyTileURL;
                   }
               }
-            """ % args    # noqa
+            """ % args)
 
-        s += """
+        # Window sizing/resizing JS functions
+        html_parts.append("""
            function getWindowHeight() {
                 if (self.innerHeight) return self.innerHeight;
                     if (document.documentElement && document.documentElement.clientHeight)
@@ -2765,8 +2776,10 @@ class GDAL2Tiles(object):
                 <div id="map"></div>
                 <script type="text/javascript" >resize()</script>
               </body>
-            </html>""" % args   # noqa
+            </html>""" % args)
 
+        # Join all string parts efficiently
+        s = ''.join(html_parts)
         return s
 
 
@@ -2941,6 +2954,14 @@ def main():
         single_threaded_tiling(input_file, output_folder, options)
     else:
         multi_threaded_tiling(input_file, output_folder, options)
+
+def _get_epsg_srs(epsg_code):
+    srs = _EPSG_SRS_CACHE.get(epsg_code)
+    if srs is None:
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(epsg_code)
+        _EPSG_SRS_CACHE[epsg_code] = srs
+    return srs
 
 
 if __name__ == '__main__':
