@@ -51,6 +51,8 @@ from xml.etree import ElementTree
 from osgeo import gdal
 from osgeo import osr
 
+_EPSG_SRS_CACHE = {}
+
 try:
     from PIL import Image
     import numpy
@@ -209,7 +211,6 @@ class GlobalMercator(object):
         self.initialResolution = 2 * math.pi * 6378137 / self.tileSize
         # 156543.03392804062 for tileSize 256 pixels
         self.originShift = 2 * math.pi * 6378137 / 2.0
-        # 20037508.342789244
 
     def LatLonToMeters(self, lat, lon):
         "Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
@@ -223,10 +224,11 @@ class GlobalMercator(object):
     def MetersToLatLon(self, mx, my):
         "Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
 
-        lon = (mx / self.originShift) * 180.0
-        lat = (my / self.originShift) * 180.0
-
-        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2.0)
+        inv_originShift = 180.0 / self.originShift
+        lon = mx * inv_originShift
+        lat = my * inv_originShift
+        pi = math.pi
+        lat = 180.0 / pi * (2.0 * math.atan(math.exp(lat * pi / 180.0)) - pi / 2.0)
         return lat, lon
 
     def PixelsToMeters(self, px, py, zoom):
@@ -413,7 +415,7 @@ class GlobalGeodetic(object):
         )
 
     def TileLatLonBounds(self, tx, ty, zoom):
-        "Returns bounds of the given tile in the SWNE form"
+        """Returns bounds of the given tile in the SWNE form"""
         b = self.TileBounds(tx, ty, zoom)
         return (b[1], b[0], b[3], b[2])
 
@@ -712,12 +714,14 @@ def setup_output_srs(input_srs, options):
     """
     Setup the desired SRS (based on options)
     """
-    output_srs = osr.SpatialReference()
+    profile = options.profile
 
-    if options.profile == 'mercator':
-        output_srs.ImportFromEPSG(3857)
-    elif options.profile == 'geodetic':
-        output_srs.ImportFromEPSG(4326)
+    # Use cached instances for standard profiles; else copy input_srs
+    if profile == 'mercator':
+        # Use a clone to avoid potential mutation of cached SRS
+        output_srs = _get_epsg_srs(3857).Clone()
+    elif profile == 'geodetic':
+        output_srs = _get_epsg_srs(4326).Clone()
     else:
         output_srs = input_srs
 
@@ -2825,27 +2829,61 @@ class ProgressBar(object):
 
 
 def get_tile_swne(tile_job_info, options):
+    # Optimize by avoiding redundant class constructions and SRS parsing if called repeatedly with same profile
     if options.profile == 'mercator':
-        mercator = GlobalMercator()
+        # GlobalMercator is stateless except for __init__ parameters (tileSize)
+        # If pattern of repeated tile calls is observed with default tileSize, we can use a static instance
+        # Create an attribute on the function for persistent reuse if possible (thread-safety not considered)
+        if not hasattr(get_tile_swne, "_global_mercator") or getattr(get_tile_swne, "_gm_tileSize", None) != 256:
+            get_tile_swne._global_mercator = GlobalMercator()
+            get_tile_swne._gm_tileSize = 256
+        mercator = get_tile_swne._global_mercator
         tile_swne = mercator.TileLatLonBounds
+
     elif options.profile == 'geodetic':
-        geodetic = GlobalGeodetic(options.tmscompatible)
+        tmscompatible = options.tmscompatible
+        if not hasattr(get_tile_swne, "_global_geodetic") or getattr(get_tile_swne, "_gg_tmscompatible", object()) != tmscompatible:
+            get_tile_swne._global_geodetic = GlobalGeodetic(tmscompatible)
+            get_tile_swne._gg_tmscompatible = tmscompatible
+        geodetic = get_tile_swne._global_geodetic
         tile_swne = geodetic.TileLatLonBounds
+
     elif options.profile == 'raster':
-        srs4326 = osr.SpatialReference()
-        srs4326.ImportFromEPSG(4326)
+        # These OSR operations are very costly. Cache SRS/CT if possible, based on in_srs_wkt
+        srs4326 = getattr(get_tile_swne, "_cached_srs4326", None)
+        if srs4326 is None:
+            srs4326 = osr.SpatialReference()
+            srs4326.ImportFromEPSG(4326)
+            get_tile_swne._cached_srs4326 = srs4326
+
         if tile_job_info.kml and tile_job_info.in_srs_wkt:
-            in_srs = osr.SpatialReference()
-            in_srs.ImportFromWkt(tile_job_info.in_srs_wkt)
-            ct = osr.CoordinateTransformation(in_srs, srs4326)
+            cached_key = (tile_job_info.in_srs_wkt, id(srs4326))
+            cache = getattr(get_tile_swne, "_ct_cache", None)
+            if cache is None:
+                cache = {}
+                get_tile_swne._ct_cache = cache
+            if cached_key in cache:
+                ct = cache[cached_key][0]
+                in_srs = cache[cached_key][1]
+            else:
+                in_srs = osr.SpatialReference()
+                in_srs.ImportFromWkt(tile_job_info.in_srs_wkt)
+                ct = osr.CoordinateTransformation(in_srs, srs4326)
+                cache[cached_key] = (ct, in_srs)  # Avoid further lookups
+
+            tilesize = tile_job_info.tilesize
+            tmaxz = tile_job_info.tmaxz
+            out_geo_trans = tile_job_info.out_geo_trans
+            ominy = tile_job_info.ominy
+            is_epsg_4326 = tile_job_info.is_epsg_4326
 
             def rastertileswne(x, y, z):
-                pixelsizex = (2 ** (tile_job_info.tmaxz - z) * tile_job_info.out_geo_trans[1])
-                west = tile_job_info.out_geo_trans[0] + x * tile_job_info.tilesize * pixelsizex
-                east = west + tile_job_info.tilesize * pixelsizex
-                south = tile_job_info.ominy + y * tile_job_info.tilesize * pixelsizex
-                north = south + tile_job_info.tilesize * pixelsizex
-                if not tile_job_info.is_epsg_4326:
+                pixelsizex = (2 ** (tmaxz - z) * out_geo_trans[1])
+                west = out_geo_trans[0] + x * tilesize * pixelsizex
+                east = west + tilesize * pixelsizex
+                south = ominy + y * tilesize * pixelsizex
+                north = south + tilesize * pixelsizex
+                if not is_epsg_4326:
                     # Transformation to EPSG:4326 (WGS84 datum)
                     west, south = ct.TransformPoint(west, south)[:2]
                     east, north = ct.TransformPoint(east, north)[:2]
@@ -2941,6 +2979,14 @@ def main():
         single_threaded_tiling(input_file, output_folder, options)
     else:
         multi_threaded_tiling(input_file, output_folder, options)
+
+def _get_epsg_srs(epsg_code):
+    srs = _EPSG_SRS_CACHE.get(epsg_code)
+    if srs is None:
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(epsg_code)
+        _EPSG_SRS_CACHE[epsg_code] = srs
+    return srs
 
 
 if __name__ == '__main__':
